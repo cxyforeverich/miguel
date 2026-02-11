@@ -69,15 +69,10 @@ class PV:
         self.module_lib = pd.read_csv(module_csv, sep=',', skiprows=[1, 2])
         self.inverter_lib = pd.read_csv(inverter_csv, sep=',', skiprows=[1, 2])
 
-
+        pv_data = pv_data or {}
 
         if pv_profile is not None:
             # Create DataFrame from existing pv profile
-            print("DEBUG: pv_profile received in PV class")
-            print("  → Length:", len(pv_profile))
-            print("  → Missing values:", pv_profile.isna().sum())
-            print("  → Max:", pv_profile.max())
-
             self.df = pd.DataFrame({'P [W]': pv_profile})
 
             # Ensure PV profile uses the environment's time index so lookups by
@@ -94,11 +89,6 @@ class PV:
 
             #self.df['P [W]'] = pv_profile
             self.p_n = p_n
-            ####
-            print("DEBUG AFTER SETTING P [W] in self.df")
-            print("  → Sum:", self.df['P [W]'].sum())
-            print("  → Max:", self.df['P [W]'].max())
-            print("DEBUG: PV p_n =", self.p_n)
         elif p_n is not None:
             self.p_n = p_n
             self.longitude = self.env.longitude
@@ -109,9 +99,11 @@ class PV:
             else:
                 self.surface_tilt = pv_data.get('surface_tilt')
             self.surface_azimuth = pv_data.get('surface_azimuth')
-            system_parameters = self.pick_pv_system(min_module_power=pv_data.get('min_module_power'),
-                                                    max_module_power=pv_data.get('max_module_power'),
-                                                    inverter_power_range=pv_data.get('inverter_power_range'))
+            system_parameters = self.pick_pv_system(
+                min_module_power=pv_data.get('min_module_power', 300),
+                max_module_power=pv_data.get('max_module_power', 400),
+                inverter_power_range=pv_data.get('inverter_power_range', 2500),
+            )
             self.pv_module_parameters = system_parameters[0]
             self.pv_module = system_parameters[1]
             self.inverter_parameters = system_parameters[2]
@@ -125,7 +117,7 @@ class PV:
             self.modelchain = pvlib_parameters[2]
             # Run pvlib
             self.annual_pv_yield = self.run(weather_data=self.weather_data)
-            self.annual_pv_yield.index = self.convert_index_time()
+            self.annual_pv_yield.index = self.convert_index_time(len(self.annual_pv_yield))
             self.pv_yield = self.annual_pv_yield.loc[self.env.time_series[0]:self.env.time_series[-1]]
             if self.env.i_step != 60:
                 self.pv_yield = self.interpolate_values()
@@ -152,7 +144,7 @@ class PV:
             self.modelchain = pvlib_parameters[2]
             # Create Profile and dispatch pvlib
             self.annual_pv_yield = self.run(weather_data=self.weather_data)
-            self.annual_pv_yield.index = self.convert_index_time()
+            self.annual_pv_yield.index = self.convert_index_time(len(self.annual_pv_yield))
             self.pv_yield = self.annual_pv_yield.loc[self.env.time_series[0]:self.env.time_series[-1]]
             self.pv_yield = self.interpolate_values()
             self.df['P [W]'] = np.where(self.pv_yield < 0, 0, self.pv_yield)
@@ -161,25 +153,26 @@ class PV:
         self.c_invest_n = c_invest_n
         self.c_op_main_n = c_op_main_n
         self.c_var_n = c_var_n
-        self.co2_init = co2_init * self.p_n / 1000  # kg/kW
+        self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
+        self.co2_init = co2_init * self.p_n_kw  # kg
         if c_invest is None:
-            self.c_invest = self.c_invest_n * self.p_n / 1000
+            self.c_invest = self.c_invest_n * self.p_n_kw
         else:
             self.c_invest = c_invest
         if c_op_main is None:
-            self.c_op_main = self.c_op_main_n * self.p_n / 1000
+            self.c_op_main = self.c_op_main_n * self.p_n_kw
         else:
             self.c_op_main = c_op_main
         # Dict with technical data
         self.technical_data = {'Component': 'PV System',
                                'Name': self.name,
-                               'Nominal Power [kW]': round(self.p_n / 1000, 3),
+                               'Nominal Power [kW]': round(self.p_n_kw, 3),
                                f'Specific investment cost [{self.env.currency}/kW]': int(self.c_invest_n),
-                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.p_n / 1000),
+                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.p_n_kw),
                                f'Specific operation maintenance cost [{self.env.currency}/kW]': int(
                                    self.c_op_main_n),
                                f'Operation maintenance cost [{self.env.currency}/a]': int(
-                                   self.c_op_main_n * self.p_n / 1000)}
+                                   self.c_op_main_n * self.p_n_kw)}
 
         if pv_profile is not None:
             pass
@@ -287,29 +280,27 @@ class PV:
 
         return simulation_results
 
-    def convert_index_time(self):
+    def convert_index_time(self, periods: int):
         """
-        Convert results to current year and time resolution
+        Convert simulation index to a deterministic hourly range.
+
+        This avoids hardcoding a calendar-year length (8760), which can
+        mismatch when the environment end date is not the final hour of the
+        year (e.g. end date entered as YYYY-12-31 00:00 in the GUI).
+
+        :param periods: int
+            Number of simulation samples.
         :return: pd.DatetimeIndex
-            time index in self.env time resolution
+            hourly index with matching length.
         """
         start_date = self.env.time_series[0]
-        start_y = start_date.year
-        end_date = self.env.time_series[-1]
-        end_y = end_date.year
-        # Create time series for simulated year in environment
-        start = dt.datetime(year=start_y,
+        start = dt.datetime(year=start_date.year,
                             month=1,
                             day=1,
                             hour=0,
                             minute=0)
-        end = dt.datetime(year=end_y,
-                          month=12,
-                          day=31,
-                          hour=23,
-                          minute=0)
         pv_yield_time_series = pd.date_range(start=start,
-                                             end=end,
+                                             periods=periods,
                                              freq='1h')
 
         return pv_yield_time_series

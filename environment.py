@@ -119,13 +119,23 @@ class Environment:
             self.electricity_price = 0.0  # US$/kWh
             self.avg_co2_price = 0  # US$//t
         else:
-            self.currency = economy.get('currency')
-            self.d_rate = economy.get('d_rate')
-            self.lifetime = economy.get('lifetime')  # a
-            self.electricity_price = economy.get('electricity_price')  # US$//kWh
-            self.avg_co2_price = economy.get('co2_price')  # US$/t
-            self.pv_feed_in_tariff = economy.get('pv_feed_in_tariff')  # US$//kWh
-            self.wt_feed_in_tariff = economy.get('wt_feed_in_tariff')  # US$//kWh
+            self.currency = economy.get('currency', 'US$')
+            self.d_rate = economy.get('d_rate', 0.03)
+            self.lifetime = economy.get('lifetime', 20)  # a
+            self.electricity_price = economy.get('electricity_price', 0.0)  # US$/kWh
+            self.avg_co2_price = economy.get('co2_price', 0.0)  # US$/t
+            self.pv_feed_in_tariff = economy.get('pv_feed_in_tariff', 0.0)  # US$/kWh
+            self.wt_feed_in_tariff = economy.get('wt_feed_in_tariff', 0.0)  # US$/kWh
+
+            # Normalize explicit None values from callers (e.g. GUI off-grid mode)
+            if self.electricity_price is None:
+                self.electricity_price = 0.0
+            if self.avg_co2_price is None:
+                self.avg_co2_price = 0.0
+            if self.pv_feed_in_tariff is None:
+                self.pv_feed_in_tariff = 0.0
+            if self.wt_feed_in_tariff is None:
+                self.wt_feed_in_tariff = 0.0
         if ecology is None:
             self.co2_grid = 0  # kg CO2/kWh
         else:
@@ -213,27 +223,34 @@ class Environment:
         self.config = ConfigParser()
         self.create_config()
 
+
     def find_location(self):
         """
         Find address based on coordinates
         :return: list
         """
-        geolocator = Nominatim(user_agent='miguel_application_v1.0')
-        location = geolocator.reverse(f'{self.latitude},{self.longitude}')
-        if location is None:
-            sys.exit('Coordinates not on land.')
-        address = location.raw['address']
-        city = address.get('city', '')
-        if city == '':
+        try:
+            geolocator = Nominatim(user_agent='miguel_application_v1.0')
+            location = geolocator.reverse(f'{self.latitude},{self.longitude}')
+            if location is None:
+                raise ValueError('Coordinates not on land.')
+            address = location.raw.get('address', {})
+            city = address.get('city', '')
+            if city == '':
+                city = None
+            state = address.get('state', '')
+            country = address.get('country', '')
+            code = address.get('country_code')
+            zipcode = address.get('postcode')
+        except Exception as e:
+            print(f"[WARN] find_location failed: {e} — using coordinate-based fallback")
             city = None
-        state = address.get('state', '')
-        country = address.get('country', '')
-        code = address.get('country_code')
-        zipcode = address.get('postcode')
-        if self.latitude < 0:
-            hemisphere = 'south'
-        else:
-            hemisphere = 'north'
+            zipcode = None
+            state = ''
+            country = ''
+            code = None
+
+        hemisphere = 'south' if self.latitude < 0 else 'north'
 
         return city, zipcode, state, country, code, hemisphere
 
@@ -243,11 +260,14 @@ class Environment:
         :return:
         """
         url = f'https://api.opentopodata.org/v1/aster30m?locations={self.latitude},{self.longitude}'
-        result = requests.get(url)
-
-        elevation = result.json()['results'][0]['elevation']
-
-        return elevation
+        try:
+            result = requests.get(url, timeout=15)
+            result.raise_for_status()
+            elevation = result.json()['results'][0]['elevation']
+            return elevation
+        except Exception as e:
+            print(f"[WARN] get_altitude failed: {e} — using 0 m fallback")
+            return 0
 
     def find_season(self):
         if self.hemisphere == 'south':
@@ -583,9 +603,9 @@ class Environment:
 
     def add_electrolyser(self,
                          p_n : float = None,
-                         c_invest_n: float = None,
+                         c_invest_n: float = 1854.6,
                          c_invest: float = None,
-                         c_op_main_n: float= None,
+                         c_op_main_n: float= 18.55,
                          c_op_main: float= None,
                          lifetime: float = None):
         """
@@ -625,9 +645,9 @@ class Environment:
                        capacity: float,
                        initial_level: float = None,
                        name= None,
-                       c_invest_n: float = None,
+                       c_invest_n: float = 534.94,
                        c_invest: float = None,
-                       c_op_main_n: float = None,
+                       c_op_main_n: float = 0,
                        c_op_main: float = None,
                        lifetime: float =20
                        ):
@@ -661,9 +681,9 @@ class Environment:
 
     def add_fuel_cell(self,
                      max_power: float = None,
-                      c_invest_n: float = None,
+                      c_invest_n: float = 2500,
                       c_invest: float = None,
-                      c_op_main_n: float = None,
+                      c_op_main_n: float = 0,
                       c_op_main: float = None,
                       lifetime:float = 10 #years
                      ) :

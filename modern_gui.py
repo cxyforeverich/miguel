@@ -44,6 +44,7 @@ class MiGUELApp:
         self.create_system_tab()
         self.create_load_tab()
         self.create_pv_tab()
+        self.create_wind_tab()
         self.create_storage_tab()
         self.create_hydrogen_tab()
         self.create_simulation_tab()
@@ -245,10 +246,52 @@ class MiGUELApp:
         self.pv_list = tk.Listbox(list_frame, height=5)
         self.pv_list.pack(fill='both', expand=True)
         
-    def create_storage_tab(self):
-        """Tab 4: Battery Storage"""
+    def create_wind_tab(self):
+        """Tab 4: Wind Turbine"""
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="4. Battery Storage")
+        self.notebook.add(tab, text="4. Wind Turbine")
+
+        main_frame = ttk.Frame(tab, padding=10)
+        main_frame.pack(fill='both', expand=True)
+
+        config_frame = ttk.LabelFrame(main_frame, text="Wind Turbine Configuration", padding=10)
+        config_frame.pack(fill='x', pady=5)
+
+        ttk.Label(config_frame, text="Nominal Power (kW):").grid(row=0, column=0, sticky='w', pady=2)
+        self.wt_power = ttk.Entry(config_frame, width=20)
+        self.wt_power.grid(row=0, column=1, pady=2)
+        self.wt_power.insert(0, "100")
+
+        ttk.Label(config_frame, text="Capacity Factor (0-1):").grid(row=1, column=0, sticky='w', pady=2)
+        self.wt_capacity_factor = ttk.Entry(config_frame, width=20)
+        self.wt_capacity_factor.grid(row=1, column=1, pady=2)
+        self.wt_capacity_factor.insert(0, "0.25")
+
+        econ_frame = ttk.LabelFrame(main_frame, text="Economic Parameters", padding=10)
+        econ_frame.pack(fill='x', pady=5)
+
+        ttk.Label(econ_frame, text="Investment Cost ($):").grid(row=0, column=0, sticky='w', pady=2)
+        self.wt_invest = ttk.Entry(econ_frame, width=20)
+        self.wt_invest.grid(row=0, column=1, pady=2)
+        self.wt_invest.insert(0, "120000")
+
+        ttk.Label(econ_frame, text="O&M Cost ($/year):").grid(row=1, column=0, sticky='w', pady=2)
+        self.wt_om = ttk.Entry(econ_frame, width=20)
+        self.wt_om.grid(row=1, column=1, pady=2)
+        self.wt_om.insert(0, "3000")
+
+        ttk.Button(main_frame, text="Add Wind Turbine", command=self.add_wind_turbine).pack(pady=10)
+
+        list_frame = ttk.LabelFrame(main_frame, text="Added Wind Turbines", padding=10)
+        list_frame.pack(fill='both', expand=True, pady=5)
+
+        self.wt_list = tk.Listbox(list_frame, height=5)
+        self.wt_list.pack(fill='both', expand=True)
+
+    def create_storage_tab(self):
+        """Tab 5: Battery Storage"""
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="5. Battery Storage")
         
         main_frame = ttk.Frame(tab, padding=10)
         main_frame.pack(fill='both', expand=True)
@@ -299,7 +342,7 @@ class MiGUELApp:
     def create_hydrogen_tab(self):
         """Tab 5: Hydrogen System (Electrolyser, H2 Storage, Fuel Cell)"""
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="5. Hydrogen System")
+        self.notebook.add(tab, text="6. Hydrogen System")
         
         # Create scrollable canvas
         canvas = tk.Canvas(tab)
@@ -391,9 +434,9 @@ class MiGUELApp:
         self.h2_list.pack(fill='both', expand=True)
         
     def create_simulation_tab(self):
-        """Tab 6: Run Simulation"""
+        """Tab 7: Run Simulation"""
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="6. Run Simulation")
+        self.notebook.add(tab, text="7. Run Simulation")
         
         main_frame = ttk.Frame(tab, padding=20)
         main_frame.pack(fill='both', expand=True)
@@ -425,9 +468,9 @@ class MiGUELApp:
         self.progress.pack(fill='x', pady=5)
         
     def create_results_tab(self):
-        """Tab 7: Results"""
+        """Tab 8: Results"""
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="7. Results")
+        self.notebook.add(tab, text="8. Results")
         
         main_frame = ttk.Frame(tab, padding=10)
         main_frame.pack(fill='both', expand=True)
@@ -581,7 +624,12 @@ class MiGUELApp:
             
             pv_data = {
                 'surface_tilt': tilt,
-                'surface_azimuth': azimuth
+                'surface_azimuth': azimuth,
+                # Keep defaults aligned with main.py/demo expectations so GUI
+                # users can add PV without having to know module catalog bounds.
+                'min_module_power': 300,
+                'max_module_power': 400,
+                'inverter_power_range': 2500,
             }
             
             self.env.add_pv(p_n=power, pv_data=pv_data, c_invest=invest, c_op_main=om)
@@ -594,6 +642,32 @@ class MiGUELApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add PV:\n{str(e)}")
             
+    def add_wind_turbine(self):
+        """Add wind turbine"""
+        if not self.env:
+            messagebox.showwarning("Warning", "Please create the system first (Tab 1)")
+            return
+
+        try:
+            power = float(self.wt_power.get()) * 1000  # Convert to W
+            cf = float(self.wt_capacity_factor.get())
+            invest = float(self.wt_invest.get())
+            om = float(self.wt_om.get())
+
+            if cf < 0 or cf > 1:
+                raise ValueError("Capacity factor must be between 0 and 1")
+
+            wt_profile = pd.Series(power * cf, index=self.env.time)
+            self.env.add_wind_turbine(p_n=power, wt_profile=wt_profile, c_invest=invest, c_op_main=om)
+
+            msg = f"Wind Turbine {len(self.env.wind_turbine)}: {power/1000:.1f} kW (CF={cf:.2f})"
+            self.wt_list.insert(tk.END, msg)
+            self.components_added.append(msg)
+            self.update_status(f"Added {msg}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add wind turbine:\n{str(e)}")
+
     def add_storage(self):
         """Add battery storage"""
         if not self.env:
@@ -670,7 +744,7 @@ class MiGUELApp:
             invest = float(self.fuelcell_invest.get())
             om = float(self.fuelcell_om.get())
             
-            self.env.add_fuel_cell(p_n=power, c_invest=invest, c_op_main=om)
+            self.env.add_fuel_cell(max_power=power, c_invest=invest, c_op_main=om)
             
             msg = f"Fuel Cell {len(self.env.fuel_cell)}: {power/1000} kW"
             self.h2_list.insert(tk.END, msg)
@@ -702,6 +776,11 @@ class MiGUELApp:
             overview += f"✓ PV Systems: {len(self.env.pv)}\n"
             for i, pv in enumerate(self.env.pv, 1):
                 overview += f"  - PV_{i}: {pv.p_n/1000:.1f} kW\n"
+
+        if len(self.env.wind_turbine) > 0:
+            overview += f"✓ Wind Turbines: {len(self.env.wind_turbine)}\n"
+            for i, wt in enumerate(self.env.wind_turbine, 1):
+                overview += f"  - WT_{i}: {wt.p_n/1000:.1f} kW\n"
                 
         if len(self.env.storage) > 0:
             overview += f"✓ Battery Storage: {len(self.env.storage)}\n"
@@ -762,7 +841,7 @@ class MiGUELApp:
                 self.display_results()
                 
                 # Switch to results tab
-                self.notebook.select(6)
+                self.notebook.select(7)
                 
             except Exception as e:
                 self.progress.stop()
@@ -776,45 +855,72 @@ class MiGUELApp:
         """Display simulation results"""
         if not self.evaluation:
             return
-            
+
+        df = self.evaluation.evaluation_df
+        currency = self.env.currency if self.env else 'US$'
+
+        def safe_get(row, col, default=0.0):
+            try:
+                val = df.loc[row, col]
+                if pd.isna(val):
+                    return default
+                return float(val)
+            except Exception:
+                return default
+
         results = "=== SIMULATION RESULTS ===\n\n"
-        
+
         # Economic results
         results += "=== ECONOMIC ANALYSIS ===\n"
-        if hasattr(self.evaluation, 'lcoe'):
-            results += f"LCOE: ${self.evaluation.lcoe:.4f} /kWh\n"
-        if hasattr(self.evaluation, 'npc'):
-            results += f"Net Present Cost: ${self.evaluation.npc:,.2f}\n"
-        if hasattr(self.evaluation, 'total_investment'):
-            results += f"Total Investment: ${self.evaluation.total_investment:,.2f}\n\n"
-            
+        lcoe = safe_get('System', f'LCOE [{currency}/kWh]', default=float('nan'))
+        if not pd.isna(lcoe):
+            results += f"System LCOE: {lcoe:.4f} {currency}/kWh\n"
+        results += f"Total Investment: {safe_get('System', f'Investment cost [{currency}]'):,.2f} {currency}\n"
+        results += f"Annual Cost: {safe_get('System', 'Annual cost [US$/a]'):,.2f} {currency}/a\n"
+        results += f"Lifetime Cost: {safe_get('System', 'Lifetime cost [US$]'):,.2f} {currency}\n\n"
+
         # Energy flows
         results += "=== ENERGY FLOWS ===\n"
-        if hasattr(self.evaluation, 'total_load'):
-            results += f"Total Load: {self.evaluation.total_load:,.2f} kWh\n"
-        if hasattr(self.evaluation, 'total_pv'):
-            results += f"Total PV Generation: {self.evaluation.total_pv:,.2f} kWh\n"
-        if hasattr(self.evaluation, 're_fraction'):
-            results += f"Renewable Fraction: {self.evaluation.re_fraction:.2%}\n\n"
-            
+        results += f"System Annual Load: {safe_get('System', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"PV Total Annual: {safe_get('PV_Total', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"PV to Load: {safe_get('PV_to_load', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"PV to Storage: {safe_get('PV_to_storage', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"PV to Electrolyser: {safe_get('PV_to_electrolyser', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"WT to Load: {safe_get('WT_to_load', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"WT to Storage: {safe_get('WT_to_storage', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"WT to Electrolyser: {safe_get('WT_to_electrolyser', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+        results += f"WT Total Annual: {safe_get('WT_Total', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+
+        for wt in self.env.wind_turbine:
+            results += f"{wt.name} Annual: {safe_get(wt.name, 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+
+        if self.env.grid is not None:
+            grid_name = self.env.grid.name
+            results += f"Grid Import: {safe_get(grid_name, 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+
+        for es in self.env.storage:
+            results += f"{es.name} Charge: {safe_get(es.name + '_charge', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+            results += f"{es.name} Discharge: {safe_get(es.name + '_discharge', 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+
+        results += "\n"
+
         # Hydrogen system
-        if len(self.env.electrolyser) > 0:
+        if len(self.env.electrolyser) > 0 or len(self.env.fuel_cell) > 0:
             results += "=== HYDROGEN SYSTEM ===\n"
-            if hasattr(self.evaluation, 'total_h2_produced'):
-                results += f"Total H2 Produced: {self.evaluation.total_h2_produced:.2f} kg\n"
-            if hasattr(self.evaluation, 'total_h2_consumed'):
-                results += f"Total H2 Consumed: {self.evaluation.total_h2_consumed:.2f} kg\n\n"
-                
+            for el in self.env.electrolyser:
+                results += f"{el.name} Input Energy: {safe_get(el.name, 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+            for fc in self.env.fuel_cell:
+                results += f"{fc.name} Output Energy: {safe_get(fc.name, 'Annual energy supply [kWh/a]'):,.2f} kWh/a\n"
+            results += "\n"
+
         # Environmental
         results += "=== ENVIRONMENTAL IMPACT ===\n"
-        if hasattr(self.evaluation, 'total_co2'):
-            results += f"Total CO2 Emissions: {self.evaluation.total_co2:,.2f} kg\n"
-        if hasattr(self.evaluation, 'co2_avoided'):
-            results += f"CO2 Avoided: {self.evaluation.co2_avoided:,.2f} kg\n"
-            
+        results += f"Annual CO2: {safe_get('System', 'Annual CO2 emissions [t/a]'):,.3f} t/a\n"
+        results += f"Lifetime CO2: {safe_get('System', 'Lifetime CO2 emissions [t]'):,.3f} t\n"
+
         self.results_text.delete('1.0', tk.END)
         self.results_text.insert('1.0', results)
-        
+
     def export_results(self):
         """Export results to Excel"""
         if not self.operator:
