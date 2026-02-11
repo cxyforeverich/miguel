@@ -49,14 +49,15 @@ class H2Storage:
         # Emissionsdaten
         self.co2_init = co2_init * self.capacity  # kg CO₂
         # Kosten
-        self.invest_cost =c_invest   # Investement cost [USD]
+        self.invest_cost = c_invest  # Investment cost [USD]
+        self.c_invest_n = c_invest_n if c_invest_n is not None else 534.94
         if c_invest is None:
-           self.c_invest = c_invest_n * self.capacity
+            self.c_invest = self.c_invest_n * self.capacity
         else:
             self.c_invest = c_invest
-        #Operation Cost
-        self.c_op_main = c_op_main     # USD /a
-        self.c_op_main_n = c_op_main_n   #USD /KG ODER kw
+
+        # Operation cost
+        self.c_op_main_n = c_op_main_n if c_op_main_n is not None else 0
         if c_op_main is None:
             self.c_op_main = self.c_op_main_n * self.capacity
         else:

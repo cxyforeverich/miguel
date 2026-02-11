@@ -1,4 +1,5 @@
 import math
+import os
 import sys
 import numpy as np
 import pandas as pd
@@ -43,11 +44,12 @@ class Evaluation:
         self.grid_energy_supply = {}
         self.storage_energy_supply = {}
 
-        for component in self.env.re_supply:
+        for component in self.env.supply_components:
             self.calc_component_energy_supply(component=component)
             self.calc_co2_emissions(component=component)
             self.calc_cost(component=component)
         self.calc_pv_system_flows()
+        self.calc_wt_system_flows()
         # Berechnung der Speicherenergie (inkl. H2)
         self.calc_storage_energy_supply()
         self.calc_H2_energy_supply()
@@ -68,9 +70,36 @@ class Evaluation:
         self.calc_lifetime_energy_supply()
         self.calc_system_values()
         self.calc_lcoe()
-        self.evaluation_df.to_csv(sys.path[1] + '/export/system_evaluation.csv',
-                                  sep=self.env.csv_sep,
-                                  decimal=self.env.csv_decimal)
+        self.export_path = self.export_evaluation_csv()
+
+    def _project_root(self):
+        """Return project root based on this file location."""
+        return os.path.abspath(os.path.dirname(__file__))
+
+    def export_evaluation_csv(self):
+        """
+        Export evaluation table to CSV.
+
+        If the default target file is locked/open (PermissionError), write to a
+        timestamped fallback file so simulation can still complete.
+        """
+        export_dir = os.path.join(self._project_root(), 'export')
+        os.makedirs(export_dir, exist_ok=True)
+
+        default_path = os.path.join(export_dir, 'system_evaluation.csv')
+        try:
+            self.evaluation_df.to_csv(default_path,
+                                      sep=self.env.csv_sep,
+                                      decimal=self.env.csv_decimal)
+            return default_path
+        except PermissionError:
+            ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+            fallback_path = os.path.join(export_dir, f'system_evaluation_{ts}.csv')
+            self.evaluation_df.to_csv(fallback_path,
+                                      sep=self.env.csv_sep,
+                                      decimal=self.env.csv_decimal)
+            print(f"[WARN] Could not write {default_path} (file in use). Saved to {fallback_path}")
+            return fallback_path
 
     def run(self, export: bool = True):
         """
@@ -91,7 +120,9 @@ class Evaluation:
                   ['Initial CO2 emissions [t]', 'Annual CO2 emissions [t/a]', 'Lifetime CO2 emissions [t]']])
 
         if export:
-            path = sys.path[1] + "/export/evaluation_summary_output.xlsx"
+            export_dir = os.path.join(self._project_root(), "export")
+            os.makedirs(export_dir, exist_ok=True)
+            path = os.path.join(export_dir, "evaluation_summary_output.xlsx")
             self.evaluation_df.to_excel(path)
             print(f"\n💾 Results saved to: {path}")
 
@@ -108,13 +139,13 @@ class Evaluation:
         evaluation_df.loc['PV_to_storage'] = np.nan
         evaluation_df.loc['PV_to_electrolyser'] = np.nan
         evaluation_df.loc['PV_Total'] = np.nan
+        evaluation_df.loc['WT_to_load'] = np.nan
+        evaluation_df.loc['WT_to_storage'] = np.nan
+        evaluation_df.loc['WT_to_electrolyser'] = np.nan
+        evaluation_df.loc['WT_Total'] = np.nan
 
         for supply_comp in self.env.supply_components:
             evaluation_df.loc[supply_comp.name] = np.nan
-        for wt in self.env.wind_turbine:
-            evaluation_df.loc[f'{wt.name}_to_storage'] = np.nan
-            evaluation_df.loc[f'{wt.name}_from_PV_to_electrolyser [W]'] = np.nan
-
         for es in self.env.storage:
                 evaluation_df.loc[es.name] = np.nan
                 evaluation_df.loc[es.name + '_charge'] = np.nan
@@ -159,17 +190,13 @@ class Evaluation:
         Calculate lifetime energy supply
         :return:
         """
-        # How much energy does a component deliver (or consume) over the entire project lifetime (e.g., 20 years)?
-        print("\n📊 Starting lifetime energy calculation...")
         for row in self.evaluation_df.index:
             annual_energy_supply = self.evaluation_df.loc[row, 'Annual energy supply [kWh/a]']
             if pd.isna(annual_energy_supply):
-                print(f"⚠️ {row} has annual_energy_supply = NaN -> skipped")
-                continue
-            print(f"➤ {row}: annual = {annual_energy_supply}")
-            self.evaluation_df.loc[row, 'Lifetime energy supply [kWh]'] \
-                = int(self.calc_lifetime_value(initial_value=0,
-                                               annual_value=annual_energy_supply))
+                annual_energy_supply = 0
+            self.evaluation_df.loc[row, 'Lifetime energy supply [kWh]'] = int(
+                self.calc_lifetime_value(initial_value=0, annual_value=annual_energy_supply)
+            )
 
     def calc_peak_load(self):
         """
@@ -189,12 +216,23 @@ class Evaluation:
         :param component:
         :return: None
         """
-        self.n_Modul = len(self.env.pv)
-        energy_total =self.calc_pv_system_flows()
-        energy_Modul= energy_total/self.n_Modul
+        i_step = self.env.i_step
+        annual_kwh = 0.0
 
-        self.evaluation_df.loc[component.name, 'Annual energy supply [kWh/a]'] = int(energy_Modul)
+        if isinstance(component, PV):
+            prod_col = f'{component.name} production [W]'
+            if prod_col in self.op.df.columns:
+                annual_kwh = self.op.df[prod_col].clip(lower=0).sum() * i_step / 60 / 1000
+        elif isinstance(component, WindTurbine):
+            prod_col = f'{component.name} production [W]'
+            if prod_col in self.op.df.columns:
+                annual_kwh = self.op.df[prod_col].clip(lower=0).sum() * i_step / 60 / 1000
+        elif isinstance(component, Grid):
+            grid_col = f'{component.name} [W]'
+            if grid_col in self.op.df.columns:
+                annual_kwh = self.op.df[grid_col].clip(lower=0).sum() * i_step / 60 / 1000
 
+        self.evaluation_df.loc[component.name, 'Annual energy supply [kWh/a]'] = int(annual_kwh)
 
     def calc_pv_system_flows(self):
         """
@@ -227,6 +265,35 @@ class Evaluation:
 
         return pv_total
 
+    def calc_wt_system_flows(self):
+        """
+        Calculates the energy distribution of wind production:
+        WT → Load, Storage, Electrolyser, Total
+        """
+        i_step = self.env.i_step
+
+        wt_to_load = 0.0
+        for wt in self.env.wind_turbine:
+            load_col = f'{wt.name} [W]'
+            if load_col in self.op.df.columns:
+                wt_to_load += self.op.df[load_col].clip(lower=0).sum() * i_step / 60 / 1000
+        self.evaluation_df.loc['WT_to_load', 'Annual energy supply [kWh/a]'] = int(wt_to_load)
+
+        wt_to_storage = 0.0
+        if 'WT_to_storage[W]' in self.op.df.columns:
+            wt_to_storage = self.op.df['WT_to_storage[W]'].clip(lower=0).sum() * i_step / 60 / 1000
+        self.evaluation_df.loc['WT_to_storage', 'Annual energy supply [kWh/a]'] = int(wt_to_storage)
+
+        wt_to_el = 0.0
+        if 'from_WT_to_electrolyser [W]' in self.op.df.columns:
+            wt_to_el = self.op.df['from_WT_to_electrolyser [W]'].clip(lower=0).sum() * i_step / 60 / 1000
+        self.evaluation_df.loc['WT_to_electrolyser', 'Annual energy supply [kWh/a]'] = int(wt_to_el)
+
+        wt_total = wt_to_load + wt_to_storage + wt_to_el
+        self.evaluation_df.loc['WT_Total', 'Annual energy supply [kWh/a]'] = int(wt_total)
+
+        return wt_total
+
     def calc_storage_energy_supply(self):
         """
         Calculate annual energy supply of energy storage
@@ -256,12 +323,8 @@ class Evaluation:
     def calc_H2_energy_supply(self):
         for fc in self.env.fuel_cell:
             col = fc.name + ' [W]'
-            print(f"🔍 Looking for column for FuelCell: {col}")
             if col not in self.op.df.columns:
-                print(f"❌ Column '{col}' missing in Operator DataFrame!")
-            else:
-                print(f"✅ Column '{col}' found with entries:")
-                print(self.op.df[col].describe())
+                continue
             fc_power = int(sum(np.where(self.op.df[col] > 0,
                                         self.op.df[col],
                                         0).tolist()) * self.env.i_step / 60 / 1000)
@@ -275,10 +338,6 @@ class Evaluation:
                 power_sum = self.op.df[col].sum() * self.env.i_step / 60 / 1000  # kWh
                 self.evaluation_df.loc[el.name, 'Annual energy supply [kWh/a]'] = power_sum
                 total_power_kWh += power_sum
-                print(f"⚡ {el.name} energy input: {power_sum:.2f} kWh")
-            else:
-                print(f"⚠️ Column {col} missing in Operator DataFrame.")
-
 
     #================================================= CO2_Calculation ===================================================#
     #==================================================================================================================#
@@ -347,6 +406,13 @@ class Evaluation:
         investment_cost = self.calc_investment_cost(component=component)
         # Annual cost
         annual_cost = self.calc_annual_cost(component=component)
+
+        # Guard against incomplete rows (e.g., optional components with missing
+        # annual outputs) to prevent "cannot convert float NaN to integer".
+        if pd.isna(investment_cost) or pd.isna(annual_cost):
+            self.evaluation_df.loc[component.name, f'Lifetime cost [US$]'] = np.nan
+            return
+
         # Lifetime cost
         lifetime_cost = self.calc_lifetime_value(initial_value=investment_cost,
                                                  annual_value=annual_cost)
@@ -370,7 +436,9 @@ class Evaluation:
         else:
             investment_cost = component.c_invest
 
-        self.evaluation_df.loc[component.name, f'Investment cost [US$]'] = int(investment_cost)
+        self.evaluation_df.loc[component.name, f'Investment cost [US$]'] = (
+            np.nan if pd.isna(investment_cost) else int(investment_cost)
+        )
 
         return investment_cost
 
@@ -483,6 +551,9 @@ class Evaluation:
             annual_energy_supply = df.loc[row, 'Annual energy supply [kWh/a]']
             annual_cost = df.loc[row, f'Annual cost [US$/a]']
             investment_cost = df.loc[row, f'Investment cost [US$]']
+            if pd.isna(annual_energy_supply) or annual_energy_supply <= 0 or pd.isna(annual_cost) or pd.isna(investment_cost):
+                df.loc[row, f'LCOE [US$/kWh]'] = np.nan
+                continue
             lcoe = py_lcoe(annual_output=annual_energy_supply,
                            annual_operating_cost=annual_cost,
                            capital_cost=investment_cost,

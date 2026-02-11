@@ -20,6 +20,7 @@ class Electrolyser:
 
         self.env = env
         self.p_n = p_n
+        self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
         self.name = name
         self.p_min = 10
         self.efficiency_electrolyser = None
@@ -29,35 +30,31 @@ class Electrolyser:
                                         'H2_Production [kg]',
                                         'LCOH [$/kg]'], index=self. env.time)
         # Economic parameters
-        self.c_invest_n = c_invest_n    #USD/kw
-        self.c_var_n = c_var_n          #USD/kW
+        self.c_invest_n = c_invest_n if c_invest_n is not None else 1854.6  # USD/kW
+        self.c_var_n = c_var_n  # USD/kWh
         if c_invest is None:
-           self.c_invest = c_invest_n * self.p_n / 1000
+            self.c_invest = self.c_invest_n * self.p_n_kw
         else:
             self.c_invest = c_invest
-        if c_op_main_n is not None:
-            self.c_op_main_n = c_op_main_n
-        else:
-            self.c_op_main_n = self.c_invest_n * 0.03  # USD/kW
-        #Operation Cost
-        self.c_op_main_n= c_op_main_n
+
+        self.c_op_main_n = c_op_main_n if c_op_main_n is not None else self.c_invest_n * 0.03  # USD/kW/a
         if c_op_main is None:
-            self. c_op_main = self.c_op_main_n * self.p_n / 1000
+            self.c_op_main = self.c_op_main_n * self.p_n_kw
         else:
             self.c_op_main = c_op_main
         #Co2 Cost
-        self.co2_init = co2_init * self.p_n/1000   # kg
+        self.co2_init = co2_init * self.p_n_kw   # kg
 
         self.life_time=life_time
 
         # Technical data
         self.technical_data = { 'component': 'Elektrolyseur',
                                'Name': self.name,
-                               'Nominal power [kW]': round ( self.p_n/1000, 3),
+                               'Nominal power [kW]': round(self.p_n_kw, 3),
                                f'specific investment cost [US$/kW]': int(self.c_invest_n),
                                f'investment cost [US$]': int(self.c_invest),
                                f'specific operation maintenance cost[US $/ kW]': int(self.c_op_main_n),
-                               f'operation maintenance cost [US$/a]': int(self.c_op_main_n * self.p_n / 1000)}
+                               f'operation maintenance cost [US$/a]': int(self.c_op_main_n * self.p_n_kw)}
 
     def run (self,
              clock,
@@ -75,7 +72,6 @@ class Electrolyser:
         self.df_electrolyser.at[clock, 'P[%]'] = p_relative
 
         efficiency = self.calc_efficiency(p_rel=p_relative)
-        print(f"EFFICIENCY ELEKTROLYSEUR :{efficiency}")
         self.df_electrolyser.at[clock, 'Efficiency'] = round(efficiency, 2)
 
         if p_relative >= self.p_min:      # Bedingung minimale Leisteung

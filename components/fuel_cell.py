@@ -23,7 +23,7 @@ class FuelCell:
         """Initialize the Fuel Cell including economic and emission parameters.
 
         :param env: Simulation environment
-        :param max_power: Max output power [kW]
+        :param max_power: Max output power [W]
         :param co2_init_per_kw: Initial CO2 [kg/kW]
         :param c_invest: CAPEX absolute [USD]
         :param c_invest_n: specific CAPEX [USD/kW]
@@ -33,24 +33,25 @@ class FuelCell:
         """
         self.name = f"FuelCell_{len(env.fuel_cell) + 1 if hasattr(env, 'fuel_cell') else '1'}"
         self.env = env
-        self.max_power = max_power  # kW
+        self.max_power = max_power  # W
+        self.max_power_kw = self.max_power / 1000 if self.max_power is not None else 0
         self.lifetime = lifetime
         self.operating_hours = 0.0
 
         # economic and environment data
-        self.co2_init = co2_init_per_kw * (self.max_power)  # kg (per kW * kW)
+        self.co2_init = co2_init_per_kw * self.max_power_kw  # kg (per kW * kW)
         self.invest_cost = c_invest
         self.c_invest_n = c_invest_n
         self.c_var_n = c_var_n
         self.c_op_main_n = c_op_main_n
 
         if c_op_main is None:
-            self.c_op_main = self.c_op_main_n * (self.max_power)
+            self.c_op_main = self.c_op_main_n * self.max_power_kw
         else:
             self.c_op_main = c_op_main
 
         if c_invest is None:
-            self.c_invest = self.c_invest_n * (self.max_power)
+            self.c_invest = self.c_invest_n * self.max_power_kw
         else:
             self.c_invest = c_invest
 
@@ -104,7 +105,7 @@ class FuelCell:
             return c_invest_replacement, co2_replacement
         interval = self.env.lifetime / replacements
         for year in range(int(interval), int(replacements * interval) + 1, int(interval)):
-            c_invest_replacement[year] = (self.c_invest_n * (self.max_power)) / ((1 + self.env.d_rate) ** year)
+            c_invest_replacement[year] = (self.c_invest_n * self.max_power_kw) / ((1 + self.env.d_rate) ** year)
             co2_replacement[year] = (self.co2_init) / ((1 + self.env.d_rate) ** year)
 
         return c_invest_replacement, co2_replacement

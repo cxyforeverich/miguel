@@ -99,7 +99,7 @@ class Storage:
                                'Nominal Power [kW]': round(self.p_n / 1000, 3),
                                'Capacity [kWh]': self.c,
                                f'Specific investment cost [{self.env.currency}/kWh]': int(self.c_invest_n),
-                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.p_n / 1000),
+                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.c / 1000),
                                f'Specific operation maintenance cost [{self.env.currency}/kWh]': int(self.c_op_main_n),
                                f'Operation maintenance cost [{self.env.currency}/a]': int(self.c_op_main_n * self.c / 1000)}
 

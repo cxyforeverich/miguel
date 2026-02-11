@@ -49,6 +49,7 @@ class WindTurbine:
         """
         self.env = env
         self.p_n = p_n
+        self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
         self.name = name
         self.selection_parameters = selection_parameters
         self.c_invest_n = c_invest_n  # USD/kW
@@ -66,45 +67,51 @@ class WindTurbine:
             self.turbine_data = self.pick_windturbine(selection_parameters=selection_parameters)
             self.hub_height = self.turbine_data.get('hub_height')
             self.p_n = self.turbine_data.get('p_n')
+            self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
         if wind_speed is not None:
             self.df['Wind speed [km/h]'] = wind_speed
         if wt_profile is not None:
             self.df['P [W]'] = wt_profile
             self.p_n = p_n
+            self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
         if turbine_data is not None:
             self.turbine_data = turbine_data
             self.hub_height = self.turbine_data.get('hub_height')
             self.p_n = self.turbine_data.get('p_n')
+            self.p_n_kw = self.p_n / 1000 if self.p_n is not None else 0
         if c_invest is None:
-            self.c_invest = self.c_invest_n * self.p_n / 1000
+            self.c_invest = self.c_invest_n * self.p_n_kw
         else:
             self.c_invest = c_invest
         if c_op_main is None:
-            self.c_op_main = self.c_op_main_n * self.p_n / 1000
+            self.c_op_main = self.c_op_main_n * self.p_n_kw
         else:
             self.c_op_main = c_op_main
-        self.co2_init = co2_init * self.p_n / 1000  # kg
+        self.co2_init = co2_init * self.p_n_kw  # kg
 
-        self.turbine_df = self.get_turbine_data()
-        self.windturbine = self.create_wind_turbine()
-        self.modelchain = self.create_modelchain()
-        # Prepare weather data
-        self.annual_weather_data = self.env.wt_weather_data
-        self.annual_weather_data = self.modify_weather_data()
-        # Run windpowerlib
-        self.annual_wt_yield = self.run(weather_data=self.annual_weather_data)
-        self.wt_yield = self.annual_wt_yield.loc[self.env.time_series[0]:self.env.time_series[-1]]
-        self.df['P [W]'] = self.wt_yield
+        if wt_profile is not None:
+            self.df['P [W]'] = wt_profile
+        else:
+            self.turbine_df = self.get_turbine_data()
+            self.windturbine = self.create_wind_turbine()
+            self.modelchain = self.create_modelchain()
+            # Prepare weather data
+            self.annual_weather_data = self.env.wt_weather_data
+            self.annual_weather_data = self.modify_weather_data()
+            # Run windpowerlib
+            self.annual_wt_yield = self.run(weather_data=self.annual_weather_data)
+            self.wt_yield = self.annual_wt_yield.loc[self.env.time_series[0]:self.env.time_series[-1]]
+            self.df['P [W]'] = self.wt_yield
 
         # Dict with technical data
         self.technical_data = {'Component': 'Wind Turbine',
                                'Name': self.name,
-                               'Nominal Power [kW]': round(self.p_n / 1000, 3),
+                               'Nominal Power [kW]': round(self.p_n_kw, 3),
                                f'Specific investment cost [{self.env.currency}/kW]': int(self.c_invest_n),
-                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.p_n / 1000),
+                               f'Investment cost [{self.env.currency}]': int(self.c_invest_n * self.p_n_kw),
                                f'Specific operation maintenance cost [{self.env.currency}/kW]': int(self.c_op_main_n),
                                f'Operation maintenance cost [{self.env.currency}/a]': int(
-                                   self.c_op_main_n * self.p_n / 1000)}
+                                   self.c_op_main_n * self.p_n_kw)}
 
         if wt_profile is not None:
             pass
@@ -117,6 +124,8 @@ class WindTurbine:
         Get turbine data from windpowerlib
         :return: data
         """
+        if not hasattr(self.env, 'database') or self.env.database is None:
+            return pd.DataFrame()
         connect = self.env.database.connect
         data = pd.read_sql_query("SELECT * FROM windpowerlib_turbine", connect)
 
